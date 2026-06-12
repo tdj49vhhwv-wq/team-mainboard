@@ -3,7 +3,7 @@
 ## 一键运行
 
 ```bash
-cd /Users/zhaobingqing/Documents/GitHub/prospectus-pevc-project
+cd "$(dirname "$0")/.."  # 或直接 cd 到项目根目录
 bash code/run_all.sh
 ```
 

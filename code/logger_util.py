@@ -7,7 +7,12 @@ import sys
 from pathlib import Path
 from datetime import datetime
 
-LOG_DIR = Path("/Users/zhaobingqing/Documents/GitHub/prospectus-pevc-project/logs")
+import sys
+from pathlib import Path
+
+# 确保能导入同级 config 模块
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from config import LOG_DIR
 
 
 def setup_logger(name, log_file=None):

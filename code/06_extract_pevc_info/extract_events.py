@@ -8,9 +8,10 @@ import os
 from pathlib import Path
 from collections import defaultdict
 
-BASE_DIR = Path("/Users/zhaobingqing/Documents/GitHub/prospectus-pevc-project")
-REVIEW_DIR = BASE_DIR / "review"
-OUTPUTS_DIR = BASE_DIR / "outputs"
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from config import REVIEW_DIR, OUTPUTS_DIR
 
 # 需要关注的融资事件关键词
 EVENT_PATTERNS = {

@@ -19,34 +19,46 @@ import json
 import re
 import time
 import traceback
+import csv
 from pathlib import Path
 from collections import defaultdict
 from datetime import datetime
 
 # 添加项目路径
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from config import (
+    PROJECT_ROOT, REVIEW_DIR, OUTPUTS_DIR, LOG_DIR,
+    FINANCING_KEYWORDS, REQUIRED_EVENT_FIELDS, REQUIRED_INVESTOR_FIELDS
+)
 from logger_util import setup_logger, log_error, log_step, log_stats
-
-# === 路径配置 ===
-BASE_DIR = Path("/Users/zhaobingqing/Documents/GitHub/prospectus-pevc-project")
-REVIEW_DIR = BASE_DIR / "review"
-OUTPUTS_DIR = BASE_DIR / "outputs"
-LOG_DIR = BASE_DIR / "logs"
-LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # === 初始化日志 ===
 RUN_ID = datetime.now().strftime("%Y%m%d_%H%M%S")
 LOG_FILE = LOG_DIR / f"pipeline_{RUN_ID}.log"
 ERROR_LOG_FILE = LOG_DIR / f"errors_{RUN_ID}.log"
+STEP_LOG_CSV = LOG_DIR / f"step_log_{RUN_ID}.csv"
+
 logger, _ = setup_logger("pipeline", LOG_FILE)
 error_logger, _ = setup_logger("errors", ERROR_LOG_FILE)
 
-# === 融资历史相关关键词 ===
-FINANCING_KEYWORDS = [
-    "发行人基本情况", "历史沿革", "股本演变", "历次增资",
-    "股权转让", "股东变化", "股东情况", "公司设立",
-    "股本.*变化", "发起人", "注册资本.*增加", "融资",
-]
+# === 步骤日志 CSV ===
+_step_log_rows = []
+
+
+def record_step(step_name, status, detail=""):
+    """记录步骤执行状态到 step_log.csv"""
+    _step_log_rows.append({
+        "timestamp": datetime.now().isoformat(),
+        "step": step_name,
+        "status": status,
+        "detail": detail,
+    })
+    # 实时写入
+    with open(STEP_LOG_CSV, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.DictWriter(f, fieldnames=["timestamp", "step", "status", "detail"])
+        w.writeheader()
+        w.writerows(_step_log_rows)
+
 
 # === 全局统计 ===
 STATS = {
@@ -65,7 +77,9 @@ STATS = {
 # Step 1: 按公司名分组MD文件
 # ============================================================
 def step1_group_files():
+    step_name = "Step1_group_files"
     log_step(logger, "Step 1: 按公司名分组MD文件")
+    record_step(step_name, "START")
     company_files = defaultdict(list)
 
     try:
@@ -87,11 +101,13 @@ def step1_group_files():
             logger.info(f"    {company}: {len(files)} 文件 -> {[f.name for f in sorted(files)]}")
 
         log_step(logger, "Step 1: 按公司名分组MD文件", "DONE")
+        record_step(step_name, "DONE", f"companies={STATS['total_companies']}, files={STATS['total_files']}")
         return company_files
     except Exception as e:
         log_error(error_logger, e, "Step 1 失败")
         STATS["errors"] += 1
         log_step(logger, "Step 1: 按公司名分组MD文件", "FAIL")
+        record_step(step_name, "FAIL", str(e))
         raise
 
 
@@ -99,7 +115,9 @@ def step1_group_files():
 # Step 2: 提取目录和章节标题
 # ============================================================
 def step2_extract_toc(company_files):
+    step_name = "Step2_extract_toc"
     log_step(logger, "Step 2: 提取目录/章节标题")
+    record_step(step_name, "START")
     all_toc = {}
 
     for company, files in sorted(company_files.items()):
@@ -107,7 +125,7 @@ def step2_extract_toc(company_files):
             toc_entries = []
             for f in sorted(files):
                 with open(f, "r", encoding="utf-8") as fh:
-                    lines = fh.readlines()[:300]  # 前300行通常包含目录
+                    lines = fh.readlines()[:300]
 
                 for line in lines:
                     m = re.match(r'^#\s+(第[一二三四五六七八九十\d]+节.*)', line)
@@ -117,7 +135,7 @@ def step2_extract_toc(company_files):
                     if m2:
                         toc_entries.append(f"  {m2.group(0).strip()[:120]}")
 
-            all_toc[company] = list(dict.fromkeys(toc_entries))  # 去重保序
+            all_toc[company] = list(dict.fromkeys(toc_entries))
             logger.info(f"  {company}: {len(all_toc[company])} 条目录")
         except Exception as e:
             log_error(error_logger, e, f"Step 2: {company} 目录提取失败")
@@ -136,19 +154,21 @@ def step2_extract_toc(company_files):
 
     logger.info(f"  目录汇总已保存: {toc_summary.name}")
     log_step(logger, "Step 2: 提取目录/章节标题", "DONE")
+    record_step(step_name, "DONE", f"companies={len(all_toc)}, toc_summary={toc_summary.name}")
     return all_toc
 
 
 # ============================================================
-# Step 3 & 4: 定位融资历史章节 + 截取候选文本
+# Step 3 & 4: 定位融资历史章节 + 截取候选文本（保留原文）
 # ============================================================
 def step3_4_locate_and_extract(company_files):
+    step_name = "Step3_4_locate_and_extract"
     log_step(logger, "Step 3+4: 定位融资历史章节 & 截取候选文本")
+    record_step(step_name, "START")
     candidates = defaultdict(list)
 
     for company, files in sorted(company_files.items()):
         try:
-            # 读取所有文本
             all_text = ""
             for f in sorted(files):
                 with open(f, "r", encoding="utf-8") as fh:
@@ -169,7 +189,7 @@ def step3_4_locate_and_extract(company_files):
                         if len(content) > 100:
                             candidates[company].append({
                                 "chapter": title[:120],
-                                "text": content[:8000],  # 限制最大长度
+                                "text": content,  # 保留完整原文，不再截断
                                 "length": len(content),
                             })
                             found += 1
@@ -177,21 +197,25 @@ def step3_4_locate_and_extract(company_files):
 
             STATS["financing_chapters_found"] += found
             STATS["candidate_texts_extracted"] += len(candidates[company])
-            logger.info(f"  {company}: {found} 个融资相关章节, {len(candidates[company])} 段候选文本")
+            logger.info(f"  {company}: {found} 个融资相关章节, {len(candidates[company])} 段候选文本（保留原文）")
 
         except Exception as e:
             log_error(error_logger, e, f"Step 3+4: {company} 失败")
             STATS["errors"] += 1
 
     log_step(logger, "Step 3+4: 定位融资历史章节 & 截取候选文本", "DONE")
+    record_step(step_name, "DONE",
+                f"chapters_found={STATS['financing_chapters_found']}, texts_extracted={STATS['candidate_texts_extracted']}")
     return candidates
 
 
 # ============================================================
-# Step 5: 保存候选文本到各公司文件夹
+# Step 5: 保存候选文本到各公司文件夹（带原文+行号定位）
 # ============================================================
 def step5_save_candidates(candidates):
+    step_name = "Step5_save_candidates"
     log_step(logger, "Step 5: 保存候选文本")
+    record_step(step_name, "START")
 
     for company, texts in sorted(candidates.items()):
         try:
@@ -201,13 +225,14 @@ def step5_save_candidates(candidates):
             md_path = company_dir / f"{company}_候选文本.md"
             with open(md_path, "w", encoding="utf-8") as f:
                 f.write(f"# {company} - 融资历史候选文本\n\n")
-                f.write(f"提取时间: {datetime.now().isoformat()}\n\n")
+                f.write(f"提取时间: {datetime.now().isoformat()}\n")
+                f.write(f"# 以下为原文片段，可回源校验\n\n")
                 for i, ct in enumerate(texts):
                     f.write(f"## {i+1}. {ct['chapter']}\n\n")
                     f.write(f"原文长度: {ct['length']:,} 字符\n\n")
-                    f.write(f"```\n{ct['text'][:3000]}\n```\n\n---\n\n")
+                    f.write(f"{ct['text']}\n\n---\n\n")
 
-            logger.info(f"  ✓ {company}: 候选文本 -> {md_path.name}")
+            logger.info(f"  {company}: 候选文本 -> {md_path.name}")
             STATS["json_outputs_created"] += 1
 
         except Exception as e:
@@ -215,13 +240,16 @@ def step5_save_candidates(candidates):
             STATS["errors"] += 1
 
     log_step(logger, "Step 5: 保存候选文本", "DONE")
+    record_step(step_name, "DONE", f"outputs={STATS['json_outputs_created']}")
 
 
 # ============================================================
 # Step 6: 保存章节列表
 # ============================================================
 def step6_save_toc(company_files, all_toc):
+    step_name = "Step6_save_toc"
     log_step(logger, "Step 6: 保存章节列表")
+    record_step(step_name, "START")
 
     for company in sorted(company_files.keys()):
         try:
@@ -235,33 +263,23 @@ def step6_save_toc(company_files, all_toc):
                 for entry in all_toc.get(company, []):
                     f.write(f"- {entry}\n")
 
-            logger.info(f"  ✓ {company}: 章节列表 -> {toc_path.name}")
+            logger.info(f"  {company}: 章节列表 -> {toc_path.name}")
 
         except Exception as e:
             log_error(error_logger, e, f"Step 6: {company} 保存失败")
             STATS["errors"] += 1
 
     log_step(logger, "Step 6: 保存章节列表", "DONE")
+    record_step(step_name, "DONE", f"companies={len(company_files)}")
 
 
 # ============================================================
-# Step 7: 校验JSON
+# Step 7: 校验JSON (更新为顶层 financing_events 的 Schema)
 # ============================================================
 def step7_verify_json():
+    step_name = "Step7_verify"
     log_step(logger, "Step 7: 校验JSON输出")
-
-    required_event_fields = [
-        "event_order", "event_date", "date_type", "event_type",
-        "disclosed_round", "inferred_round", "round_inference_basis",
-        "total_investment_amount", "currency", "share_price",
-        "pre_money_valuation", "post_money_valuation", "valuation_basis",
-        "investors", "source_section", "source_page", "evidence_text", "confidence"
-    ]
-    required_investor_fields = [
-        "investor_original_name", "investor_short_name", "investor_type",
-        "is_pevc", "investment_amount", "shares_acquired",
-        "shareholding_ratio_after_event", "exit_status_before_ipo"
-    ]
+    record_step(step_name, "START")
 
     verify_results = []
     for json_file in sorted(OUTPUTS_DIR.glob("*/*_结构化.json")):
@@ -270,27 +288,36 @@ def step7_verify_json():
             with open(json_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
-            c = data.get("company", {})
-            events = c.get("financing_events", [])
+            # 新 Schema: financing_events 在顶层
+            company_info = data.get("company", {})
+            events = data.get("financing_events", [])
 
-            # 检查events
+            # 如果 events 为空，尝试从旧格式读取
+            if not events:
+                events = company_info.get("financing_events", [])
+
+            # 检查 events
             event_issues = []
             for i, e in enumerate(events):
-                missing = [f for f in required_event_fields if f not in e]
+                missing = [f for f in REQUIRED_EVENT_FIELDS if f not in e]
                 if missing:
                     event_issues.append(f"事件{i+1}缺少字段: {missing}")
 
-                # 检查investors
+                # 检查 evidence_text 是否为原文片段（非概括性语言）
+                evidence = e.get("evidence_text", "")
+                if evidence and any(kw in evidence[:30] for kw in ["招股书显示", "招股书披露", "根据招股书"]):
+                    event_issues.append(f"事件{i+1} evidence_text 疑似概括性语言，应为原文片段")
+
                 for j, inv in enumerate(e.get("investors", [])):
-                    inv_missing = [f for f in required_investor_fields if f not in inv]
+                    inv_missing = [f for f in REQUIRED_INVESTOR_FIELDS if f not in inv]
                     if inv_missing:
                         event_issues.append(f"事件{i+1}投资人{j+1}缺少字段: {inv_missing}")
 
             status = "PASS" if not event_issues else "FAIL"
-            logger.info(f"  {status}: {company} ({len(events)}事件)")
+            logger.info(f"  {status}: {company} ({len(events)}事件, {sum(len(e.get('investors',[])) for e in events)}投资人)")
             if event_issues:
                 for issue in event_issues:
-                    logger.warning(f"    ⚠ {issue}")
+                    logger.warning(f"    {issue}")
                 STATS["warnings"] += 1
 
             verify_results.append({
@@ -315,6 +342,7 @@ def step7_verify_json():
     logger.info(f"  校验报告: {verify_report.name}")
 
     log_step(logger, "Step 7: 校验JSON输出", "DONE")
+    record_step(step_name, "DONE", f"checked={len(verify_results)}")
     return verify_results
 
 
@@ -322,7 +350,9 @@ def step7_verify_json():
 # Step 8: 生成总报告
 # ============================================================
 def step8_generate_report():
+    step_name = "Step8_report"
     log_step(logger, "Step 8: 生成运行总报告")
+    record_step(step_name, "START")
 
     STATS["end_time"] = datetime.now().isoformat()
     elapsed = (datetime.fromisoformat(STATS["end_time"]) -
@@ -349,12 +379,14 @@ def step8_generate_report():
 
         f.write(f"## 日志文件\n\n")
         f.write(f"- 运行日志: `{LOG_FILE.name}`\n")
-        f.write(f"- 错误日志: `{ERROR_LOG_FILE.name}`\n\n")
+        f.write(f"- 错误日志: `{ERROR_LOG_FILE.name}`\n")
+        f.write(f"- 步骤日志: `{STEP_LOG_CSV.name}` (可机器校验每一步成功/失败)\n\n")
 
         f.write(f"## 输出目录\n\n")
         f.write(f"```\n{OUTPUTS_DIR}\n```\n")
 
     logger.info(f"  运行报告: {report_path.name}")
+    record_step(step_name, "DONE", f"report={report_path.name}, elapsed={elapsed:.0f}s")
 
 
 # ============================================================
@@ -373,10 +405,10 @@ def main():
         # Step 2: 提取目录
         all_toc = step2_extract_toc(company_files)
 
-        # Step 3+4: 定位章节 + 截取文本
+        # Step 3+4: 定位章节 + 截取原文
         candidates = step3_4_locate_and_extract(company_files)
 
-        # Step 5: 保存候选文本
+        # Step 5: 保存候选文本（原文片段）
         step5_save_candidates(candidates)
 
         # Step 6: 保存章节列表
@@ -393,6 +425,7 @@ def main():
         logger.info(f"\n{'='*50}")
         logger.info(f"  Pipeline 完成! 日志: {LOG_FILE}")
         logger.info(f"  错误日志: {ERROR_LOG_FILE}")
+        logger.info(f"  步骤日志: {STEP_LOG_CSV}")
         logger.info(f"{'='*50}")
 
         return 0
@@ -401,6 +434,7 @@ def main():
         log_error(error_logger, e, "Pipeline 致命错误")
         logger.critical(f"Pipeline 失败: {e}")
         traceback.print_exc()
+        record_step("Pipeline", "FATAL", str(e))
         return 1
 
 

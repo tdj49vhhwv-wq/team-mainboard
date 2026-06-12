@@ -5,7 +5,9 @@
 # ============================================================
 set -e
 
-PROJECT_DIR="/Users/zhaobingqing/Documents/GitHub/prospectus-pevc-project"
+# 自动定位项目根目录 (run_all.sh 所在目录的上级)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CODE_DIR="$PROJECT_DIR/code"
 LOG_DIR="$PROJECT_DIR/logs"
 

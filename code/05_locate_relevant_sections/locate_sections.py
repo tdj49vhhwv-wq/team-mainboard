@@ -14,25 +14,13 @@ import os
 from pathlib import Path
 from collections import defaultdict
 
-BASE_DIR = Path("/Users/zhaobingqing/Documents/GitHub/prospectus-pevc-project")
-REVIEW_DIR = BASE_DIR / "review"
-OUTPUTS_DIR = BASE_DIR / "outputs"
+import sys
+from pathlib import Path
 
-# 融资历史相关的章节关键词
-FINANCING_KEYWORDS = [
-    "发行人基本情况",
-    "历史沿革",
-    "股本演变",
-    "历次增资",
-    "股权转让",
-    "股东变化",
-    "股东情况",
-    "股本.*变化",
-    "公司设立",
-    "发起人",
-]
+# 项目根目录：code/ 的上级
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from config import REVIEW_DIR, OUTPUTS_DIR, FINANCING_KEYWORDS
 
-# 公司名到简称的映射
 COMPANY_FILES = defaultdict(list)
 
 
