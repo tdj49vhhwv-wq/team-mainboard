@@ -15,6 +15,14 @@ from datetime import datetime
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+
+# 优先使用自动提取
+try:
+    from auto_extract import auto_extract_all as auto_extract
+    HAS_AUTO = True
+except ImportError:
+    HAS_AUTO = False
 
 OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 JSONL_DIR = OUTPUTS_DIR / "week2_jsonl"
@@ -313,23 +321,53 @@ def build_equity_snapshots(events, info):
 def main():
     print("=" * 60)
     print("Week 2 JSONL 生成 (subscription_flow + equity_snapshot)")
+    if HAS_AUTO:
+        print("数据源: 自动提取 (auto_extract) + 手动补充")
+    else:
+        print("数据源: 手动结构化数据")
     print("=" * 60)
+
+    # 先跑自动提取
+    auto_results = {}
+    if HAS_AUTO:
+        print("\n>>> 自动提取中...")
+        auto_results = auto_extract()
 
     stats = {}
 
     for name, info in TARGET.items():
         print(f"\n处理: {name} ({info['code']}) [{info['src']}]")
 
+        # 1. 优先用自动提取结果
+        auto_flows = []
+        auto_snaps = []
+        if name in auto_results:
+            auto_flows = auto_results[name].get("flows", [])
+            auto_snaps = auto_results[name].get("snaps", [])
+
+        # 2. 手动数据作为补充
         if info["src"] == "manual":
             events = load_structured(name)
         else:
             events = load_review_events(name)
 
+        # 3. 合并: 自动 + 手动
+        if auto_flows or auto_snaps:
+            all_rows = auto_flows + auto_snaps
+            out = JSONL_DIR / f"{info['code']}_{name}.jsonl"
+            with open(out, "w", encoding="utf-8") as f:
+                for row in all_rows:
+                    f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            stats[name] = {"code": info["code"], "subscription_flow": len(auto_flows),
+                          "equity_snapshot": len(auto_snaps), "src": "auto"}
+            print(f"  -> {out.name}: {len(auto_flows)} flows + {len(auto_snaps)} snaps (自动)")
+            continue
+
+        # 4. 纯手动回退
         if not events:
             print(f"  ⚠ 无事件数据")
             continue
 
-        # 拆出两类记录
         sub_flows = build_subscription_flows(events, info)
         eq_snaps = build_equity_snapshots(events, info)
 
