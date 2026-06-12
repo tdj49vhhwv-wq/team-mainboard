@@ -149,8 +149,10 @@ def validate_file(path):
             actual = sf.amount_subscribed
             if actual > 0:
                 diff_pct = abs(expected - actual) / actual
-                st = "待复核" if diff_pct > 0.05 else "PASS"
-                if diff_pct > 0.05:
+                diff_abs = abs(expected - actual)
+                # 差额>1万元 或 比例>1% → 待复核
+                st = "待复核" if (diff_abs > 1.0 or diff_pct > 0.01) else "PASS"
+                if st == "待复核":
                     issues.append(f"sub_flow[{i}] {sf.subscriber_name}: 价格×数量({expected:.0f})≠金额({actual:.0f})")
                 log_cross(company, "", sf.subscription_date, sf.subscriber_name,
                           None, None, sf.shares_subscribed, expected, actual,
@@ -239,7 +241,7 @@ def validate_file(path):
                         change_status = "增持"
 
             # 有差额时标记待复核
-            review_mark = "待复核" if (diff is not None and abs(diff) > 0.01) else "PASS"
+            review_mark = "待复核" if (diff is not None and abs(diff) > 0.001) else "PASS"
             detail_text = change_status
             if review_mark == "待复核":
                 detail_text += " ←待复核"
